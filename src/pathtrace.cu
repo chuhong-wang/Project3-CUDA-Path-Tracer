@@ -4,6 +4,8 @@
 #include <thrust/execution_policy.h>
 #include <thrust/random.h>
 #include <thrust/remove.h>
+#include <thrust/device_ptr.h>
+#include <thrust/partition.h>
 
 #include "sceneStructs.h"
 #include "scene.h"
@@ -179,11 +181,6 @@ __global__ void computeIntersections(
 		return; 
 	}
 
-	if (pathSegments[path_index].remainingBounces<=0) {
-		intersections[path_index].t = -1.0f; 
-		return; 
-	}
-
 	if (path_index < num_paths)
 	{
 		PathSegment pathSegment = pathSegments[path_index];
@@ -273,6 +270,7 @@ __global__ void shadeFakeMaterial(
 			// If the material indicates that the object was a light, "light" the ray
 			if (material.emittance > 0.0f) {
 				segment.color *= (materialColor * material.emittance);
+				segment.remainingBounces = 0; 
 			}
 			// Otherwise, do some pseudo-lighting computation. This is actually more
 			// like what you would expect from shading in a rasterizer like OpenGL.
@@ -304,20 +302,19 @@ __global__ void finalGather(int nPaths, glm::vec3* image, PathSegment* iteration
 {
 	int index = (blockIdx.x * blockDim.x) + threadIdx.x;
 
-	if (index < nPaths)
+	if (index < nPaths) 
 	{
 		PathSegment iterationPath = iterationPaths[index];
 		image[iterationPath.pixelIndex] += iterationPath.color;
 	}
 }
 
-struct if_terminate
+struct if_alive
 {
   __host__ __device__
   bool operator()(const PathSegment& x)
   {
-    // return x.remainingBounces <= 0; // seg fault induced by this line // TODO: 
-	return false; 
+    return !(x.pixelIndex < 0 || x.remainingBounces <= 0); // done // TODO: 
   }
 };
 
@@ -376,6 +373,7 @@ void pathtrace(uchar4* pbo, int frame, int iter) {
 	int depth = 0;
 	PathSegment* dev_path_end = dev_paths + pixelcount; 
 	int num_paths = dev_path_end - dev_paths;
+	int num_paths_orig = num_paths;  
 
 	// --- PathSegment Tracing Stage ---
 	// Shoot ray into scene, bounce between objects, push shading chunks
@@ -417,12 +415,26 @@ void pathtrace(uchar4* pbo, int frame, int iter) {
 			dev_materials
 			);
 
-		// // stream compaction 
-		// auto dev_path_end = thrust::remove_if(dev_paths, dev_paths + num_paths, if_terminate()); 
-		// num_paths = dev_path_end - dev_paths; 
+		cudaDeviceSynchronize(); 
 
-		if (depth == 2) iterationComplete = true; // CW TODO: should be based off stream compaction results.
+		// stream compaction 
+		// thrust::device_ptr<PathSegment> thrust_dev_paths(dev_paths); 
+		// auto thrust_dev_paths_end = thrust::partition(thrust_dev_paths, thrust_dev_paths + num_paths, thrust_dev_paths, if_terminate()); 
+		// auto thrust_num_paths = thrust_dev_paths_end - thrust_dev_paths; 
+		// std::cout << "thrust_num_paths: " << thrust_num_paths << " num_paths " << num_paths << std::endl; 
+		// // if (thrust_num_paths == 0) {
+		// if (depth == 1) {
+		// 	iterationComplete = true; // CW TODO: should be based off stream compaction results.
+		// 	std::cout << "iter " << iter << " depth " << depth << std::endl; 
+		// }
 
+		dev_path_end = thrust::stable_partition(thrust::device, dev_paths, dev_path_end, if_alive());
+        if (dev_path_end == dev_paths) {
+		// if (depth == 5){
+            iterationComplete = true;
+        }
+        num_paths = dev_path_end - dev_paths;
+		
 		if (guiData != NULL)
 		{
 			guiData->TracedDepth = depth;
@@ -431,7 +443,12 @@ void pathtrace(uchar4* pbo, int frame, int iter) {
 
 	// Assemble this iteration and apply it to the image
 	dim3 numBlocksPixels = (pixelcount + blockSize1d - 1) / blockSize1d;
-	finalGather << <numBlocksPixels, blockSize1d >> > (num_paths, dev_image, dev_paths);
+	finalGather << <numBlocksPixels, blockSize1d >> > (num_paths_orig, dev_image, dev_paths);
+
+	// PathSegment* host_path = new PathSegment[1]; // Dynamically allocate memory
+	// cudaMemcpy(host_path, dev_paths, 1*sizeof(PathSegment), cudaMemcpyDeviceToHost); 
+	// std::cout << "Color: (" << host_path[0].color.x << ", " << host_path[0].color.y << ", " << host_path[0].color.z << ")" << std::endl;
+  
 
 	///////////////////////////////////////////////////////////////////////////
 

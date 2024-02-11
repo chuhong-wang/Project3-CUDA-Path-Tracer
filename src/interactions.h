@@ -86,10 +86,10 @@ void scatterRay(
         pathSegment.ray.direction = glm::normalize(calculateRandomDirectionInHemisphere(normal, rng));
     }
     pathSegment.ray.origin = intersect; 
-    // pathSegment.color *= m.color; 
+    pathSegment.color *= m.color; 
 
-    float lightTerm = glm::dot(normal, glm::vec3(0.0f, 1.0f, 0.0f));
-    pathSegment.color *= (m.color * lightTerm) * 0.3f + ((1.0f - t * 0.02f) * m.color) * 0.7f;
+    // float lightTerm = glm::dot(normal, glm::vec3(0.0f, 1.0f, 0.0f));
+    // pathSegment.color *= (m.color * lightTerm) * 0.3f + ((1.0f - t * 0.02f) * m.color) * 0.7f;
     // pathSegment.color *= u01(rng); // apply some noise because why not
 
 }
